@@ -30,6 +30,15 @@
 #include<opencv2/core/core.hpp>
 
 #include"../../../include/System.h"
+#include<sensor_msgs/Imu.h>
+//#include<tf>
+//#include <geometry_msgs/PoseStamped>
+//#include <nav_msgs/Odometry>
+#include "tf/transform_datatypes.h"
+#include <tf/transform_broadcaster.h>
+
+
+ros::Publisher camera_pose_pub;
 
 using namespace std;
 
@@ -54,17 +63,14 @@ int main(int argc, char **argv)
         ros::shutdown();
         return 1;
     }    
-
     // Create SLAM system. It initializes all system threads and gets ready to process frames.
     ORB_SLAM2::System SLAM(argv[1],argv[2],ORB_SLAM2::System::MONOCULAR,true);
-
     ImageGrabber igb(&SLAM);
 
     ros::NodeHandle nodeHandler;
-    ros::Subscriber sub = nodeHandler.subscribe("/camera/image_raw", 1, &ImageGrabber::GrabImage,&igb);
-
+    ros::Subscriber sub = nodeHandler.subscribe("/crazyflie/cameras/bottom/image", 1, &ImageGrabber::GrabImage,&igb);
+    camera_pose_pub = nodeHandler.advertise<sensor_msgs::Imu>("/crazyflie/cameras/bottom/pose",1);
     ros::spin();
-
     // Stop all threads
     SLAM.Shutdown();
 
@@ -90,7 +96,50 @@ void ImageGrabber::GrabImage(const sensor_msgs::ImageConstPtr& msg)
         return;
     }
 
-    mpSLAM->TrackMonocular(cv_ptr->image,cv_ptr->header.stamp.toSec());
+    cv::Mat mTcw,Rwc,twc;
+
+    try
+    {
+     mTcw = mpSLAM->TrackMonocular(cv_ptr->image,cv_ptr->header.stamp.toSec());
+     Rwc = mTcw.rowRange(0,3).colRange(0,3).t();
+    twc = -Rwc*mTcw.rowRange(0,3).col(3);
+    tf::Matrix3x3 M(Rwc.at<float>(0,0),Rwc.at<float>(0,1),Rwc.at<float>(0,2),
+    Rwc.at<float>(1,0),Rwc.at<float>(1,1),Rwc.at<float>(1,2),
+    Rwc.at<float>(2,0),Rwc.at<float>(2,1),Rwc.at<float>(2,2));
+    tf::Vector3 V(twc.at<float>(0), twc.at<float>(1), twc.at<float>(2));
+
+    tf::Transform tfTcw(M,V);
+
+    tf::Quaternion Q = tfTcw.getRotation();
+
+    sensor_msgs::Imu camera_pose;
+
+    camera_pose.header.stamp = ros::Time::now() ;
+    camera_pose.linear_acceleration.x = V.x();
+    camera_pose.linear_acceleration.y = V.y();
+    camera_pose.linear_acceleration.z = V.z();
+    camera_pose.orientation.x = Q.getX();
+    camera_pose.orientation.y = Q.getY();
+    camera_pose.orientation.z = Q.getZ();
+    camera_pose.orientation.w = Q.getW();
+    camera_pose_pub.publish(camera_pose);
+
+     
+    }
+
+    catch(...)
+    {
+
+	ROS_INFO(" ERROR PUBLISHING");
+    }
+
+   
+
+
+
+
+
+
 }
 
 
